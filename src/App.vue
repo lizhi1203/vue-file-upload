@@ -1,11 +1,12 @@
 <script setup>
   import { ref,computed, onMounted } from 'vue';
   import { uploadFile, mergeChunks } from './request'
+  import SparkMD5 from 'spark-md5'
   import cloneDeep from 'lodash/cloneDeep'
 
   const currFile = ref({});
   let fileChunkList = ref([]);
-  const DefaultChunkSize = 1 * 1024 * 1024;
+  const DefaultChunkSize = 5 * 1024 * 1024;
 
   onMounted(() => {
     bindEvents();
@@ -40,39 +41,76 @@
     if (!file) return;
 
     currFile.value = file;
-    fileChunkList.value = [];
-    const { filehash } = await getFileChunk(file);
+    fileChunkList.value = createFileChunk(file)
+    // 方法1: webworker
+    // const { filehash } = await calculateHashWorker();
+    // 方法2：requestIdleCallback
+    const { filehash } = await calculateHashIdle();
     uploadChunk(filehash)
-  }
-  const getFileChunk1 = (file, chunkSize = DefaultChunkSize) => {
-    return new Promise((resolve) => {
-      let currChunk = 0,
-        chunkCount = Math.ceil(file.size / chunkSize),
-        spark = new sparkMD5.ArrayBuffer();
-
-      let workLoop = deadline => {
-
-      }
-    })
   }
 
   // 获取资源分块
-  const getFileChunk = (file, chunkSize = DefaultChunkSize) => {
-    return new Promise((resolve) => {
-      let currChunk = 0,
+  const createFileChunk = (file, chunkSize = DefaultChunkSize) => {
+    let chunks = [],
+        currChunk = 0,
         chunkCount = Math.ceil(file.size / chunkSize);
       while (currChunk < chunkCount) {
         let start = currChunk * chunkSize,
           end = ((start + chunkSize) >= file.size) ? file.size : start + chunkSize;
-        fileChunkList.value.push({ chunk: file.slice(start, end), size: end - start, name: file.name });
+        chunks.push({ chunk: file.slice(start, end), size: end - start, name: file.name });
         currChunk++;
       }
-      // 开启web worker计算hash值, 防止卡主线程
+      return chunks;
+  }
+
+  // 开启web worker计算hash值, 防止卡主线程
+  const calculateHashWorker = () => {
+    return new Promise((resolve) => {
+      // webWorker是要另外加载一个js文件, vite只能读取public\worker下面的worker.js文件
+      // 开启一个子线程或者隐分身
       let worker = new Worker('/worker/hashWorker.js');
+      // 向worker的内部作用域发送一个消息
+      // 不能操作DOM、作用域要独立，所以cloneDeep克隆一份
       worker.postMessage({ fileChunkList: cloneDeep(fileChunkList.value) })
+      // Worker子线程返回一条消息时被调用
       worker.addEventListener('message', e => {
         resolve({ filehash:　e.data.filehash });
       })
+    })
+  }
+
+  // 利用浏览器时间碎片(空闲时间)计算hash值，防止卡主线程
+  const calculateHashIdle = () => {
+    return new Promise((resolve) => {
+      let currChunk = 0,
+        chunkCount = fileChunkList.value.length,
+        spark = new SparkMD5.ArrayBuffer();
+      
+      const appendToSpark = chunk => {
+        return new Promise(resolve => {
+          const fileReader = new FileReader();
+          fileReader.readAsArrayBuffer(chunk);
+          fileReader.onload = e => {
+            spark.append(e.target.result);
+            resolve();
+          }
+        })
+      };
+
+      const workLoop = async deadline => {
+        // 有任务且有空闲时间(当前帧剩余的毫秒大于0)
+        while (currChunk < chunkCount && deadline.timeRemaining() > 0) {
+          await appendToSpark(fileChunkList.value[currChunk].chunk);
+          currChunk++;
+          if (currChunk === chunkCount) {
+            resolve(spark.end())
+          }
+        }
+        // 当前浏览器处于空闲状态，才回调执行
+        window.requestIdleCallback(workLoop);
+      };
+      // 当前浏览器处于空闲状态，才回调执行
+      window.requestIdleCallback(workLoop);
     })
   }
 
@@ -92,7 +130,7 @@
   };
 
   const totalPercentage = computed(() => {
-    if (!fileChunkList.value.length) return;
+    if (!fileChunkList.value.length) return 0;
     const loaded = fileChunkList.value
       .map(item => item.size * item.percentage)
       .reduce((curr, next) => curr + next);

@@ -42,10 +42,14 @@
 
     currFile.value = file;
     fileChunkList.value = createFileChunk(file)
-    // 方法1: webworker
+    // 方法1: 普通方式计算hash
+    // const { filehash } = await calculateHashSample();
+    // 方法2：布隆过滤器抽样hash计算md5
+    const { filehash } = await calculateHashBloomFilter();
+    // 方法3: webworker
     // const { filehash } = await calculateHashWorker();
-    // 方法2：requestIdleCallback
-    const { filehash } = await calculateHashIdle();
+    // 方法4: requestIdleCallback
+    // const { filehash } = await calculateHashIdle();
     uploadChunk(filehash)
   }
 
@@ -62,6 +66,73 @@
       }
       return chunks;
   }
+
+  const calculateHashSample = () => {
+    return new Promise((resolve) => {
+      let fileReader = new FileReader(),
+        spark = new SparkMD5.ArrayBuffer(),
+        currChunk = 0,
+        chunkCount = fileChunkList.value.length;
+      
+      fileReader.onload = e => {
+        const chunk = e.target.result;
+        spark.append(chunk);
+        currChunk++;
+
+        if (currChunk < chunkCount) {
+          loadNext(currChunk)
+        } else {
+          resolve({ filehash: spark.end() })
+        }
+      }
+
+      fileReader.onerror = () => {
+        console.warn('oops, something went wrong.');
+      }
+
+      const loadNext = (index) => {
+        const chunk = fileChunkList.value[index].chunk
+        fileReader.readAsArrayBuffer(chunk)
+      }
+      loadNext(0)
+    })
+  }
+
+  // 抽样hash计算md5,不算全量.
+  // 布隆过滤器:损失一部分的精度,换取效率.
+  const calculateHashBloomFilter = () => {
+    return new Promise((resolve) => {
+      let fileReader = new FileReader(),
+        spark = new SparkMD5.ArrayBuffer(),
+        file = currFile.value,
+        size = currFile.value.size,
+        offset = 2 * 1024 * 1024,
+        // 第1个2M，最后一个区块数据全要
+        chunks = [file.slice(0, offset)],
+        cur = offset;
+      
+      while (cur < size) {
+        // 最后一个区块数据全要
+        if (cur + offset >= size) {
+          chunks.push(file.slice(cur, cur + offset));
+        } else {
+          // 中间区块，取前中后各2个字节
+          const mid = (cur + offset) / 2;
+          const end = cur + offset;
+          chunks.push(file.slice(cur, cur + 2));
+          chunks.push(file.slice(mid, mid + 2));
+          chunks.push(file.slice(end - 2, end));
+        }
+        cur += offset;
+      }
+
+      fileReader.readAsArrayBuffer(new Blob(chunks));
+      fileReader.onload = e => {
+        spark.append(e.target.result);
+        resolve({ filehash: spark.end() });
+      }
+    })
+  };
 
   // 开启web worker计算hash值, 防止卡主线程
   const calculateHashWorker = () => {

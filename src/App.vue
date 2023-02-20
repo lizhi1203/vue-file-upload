@@ -6,7 +6,7 @@
 
   const currFile = ref({});
   let fileChunkList = ref([]);
-  const DefaultChunkSize = 5 * 1024 * 1024;
+  const DefaultChunkSize = 10 * 1024 * 1024;
 
   onMounted(() => {
     bindEvents();
@@ -40,6 +40,11 @@
   const processFile = async(file) => {
     if (!file) return;
 
+    if (!await isImage(file)) {
+      alert('文件格式不对，只能上传jpg, png, gif的图片格式。');
+      return;
+    }
+
     currFile.value = file;
     fileChunkList.value = createFileChunk(file)
     // 方法1: 普通方式计算hash
@@ -65,6 +70,49 @@
         currChunk++;
       }
       return chunks;
+  }
+
+  const blobToString = (blob) => {
+    return new Promise((resolve) => {
+      const fileReader = new FileReader();
+      fileReader.onload = function(e) {
+                    // blob大对象数据类型
+        const ret = e.target.result.split('')
+                    // 返回指定位置的unicode编码
+                    .map(v => v.charCodeAt())
+                    // 转换为十六进制大写
+                    .map(v => v.toString(16).toUpperCase())
+                    // 不足两位补0
+                    .map(v => v.padStart(2, '0'))
+                    .join(' ')
+        resolve(ret)
+      }
+      fileReader.readAsBinaryString(blob)
+    })
+  }
+  const isGif = async(file) => {
+    // GIF89a和GIF87a
+    // blob数据是存储大对象数据类型, 一般存放二进制的，所以才用字节存取。
+    // 前面6个16进制'47 49 46 38 39 61'和'47 49 46 38 37 61'
+    const ret = await blobToString(file.slice(0, 6))
+    return (ret === '47 49 46 38 39 61') || (ret === '47 49 46 38 37 61')
+  }
+
+  const isPng = async(file) => {
+    // file.slice:对文件进行分块
+    const ret = await blobToString(file.slice(0, 8))
+    return (ret  === '89 50 4E 47 0D 0A 1A 0A')
+  }
+  
+  const isJpg = async(file) => {
+    const len = file.size;
+    const start = await blobToString(file.slice(0, 2));
+    const tail = await blobToString(file.slice(-2, len));
+    return (start == "FF D8" && tail == "FF D9");
+  }
+
+  const isImage = async(file) => {
+    return await isJpg(file) || await isPng(file) || await isGif(file);
   }
 
   const calculateHashSample = () => {
@@ -185,6 +233,23 @@
     })
   }
 
+  // 并发请求数量控制
+  const asyncPool = async(poolLimit, iterate, iteratorFn) => {
+    const ret = [];
+    const executing = new Set();
+    for (const item of iterate) {
+      const p = Promise.resolve().then(() => iteratorFn(item, iterate));
+      ret.push(p);
+      executing.add(p);
+      const clean = () => executing.delete(p);
+      p.then(clean).catch(clean);
+      if (executing.size >= poolLimit) {
+        await Promise.race(executing);
+      }
+    }
+    return Promise.all(ret);
+  }
+
   // 上传文件和发送合并请求
   const uploadChunk = (fileHash) => {
     const requests = fileChunkList.value.map((item, index) => {
@@ -195,9 +260,9 @@
       formData.append('fileHash', fileHash);
       return uploadFile('/upload', formData, onUploadProgress(item));
     })
-    Promise.all(requests).then(() => {
+    asyncPool(4, requests, () => {
       mergeChunks('/mergeChunks', { size: DefaultChunkSize, filename: currFile.value.name });
-    });
+    })
   };
 
   const totalPercentage = computed(() => {

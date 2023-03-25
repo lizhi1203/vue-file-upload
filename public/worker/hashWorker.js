@@ -12,7 +12,7 @@ self.onmessage = (e) => {
     if (currChunk < fileChunkList.length) {
       loadNext(currChunk);
     } else {
-      self.postMessage({ filehash: spark.end() });
+      self.postMessage({ fileMd5: spark.end() });
     }
   };
 

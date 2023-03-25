@@ -1,28 +1,56 @@
 import axios from 'axios'
+const request = axios.create({
+  baseURL: "http://localhost:3000/upload",
+  timeout: 10000,
+});
 
-const baseURL = "http://localhost:3001";
-
-export const uploadFile = (url, formData, onUploadProgress = () => {}) => {
-  return axios({
-    method: "post",
-    url,
-    baseURL,
-    headers: {
-      "Content-Type": "multipart/form-data"
-    },
-    data: formData,
-    onUploadProgress
-  })
+/**
+ *  检查文件是否已存在
+ * @param {*} url 
+ * @param {*} fileName 
+ * @param {*} fileMd5 
+ */
+export function checkFileExist(url, fileName, fileMd5) {
+  return request
+    .get(url, {
+      params: {
+        fileName,
+        fileMd5
+      },
+    })
+    .then((response) => response.data);
 }
 
-export const mergeChunks = (url, data) => {
-  return axios({
-    method: "post",
-    url,
-    baseURL,
-    headers: {
-      "Content-Type": "application/json"
+/**
+ * 上传文件
+ * @param {*} url 
+ * @param {*} formData 
+ * @param {*} onUploadProgress 回调，用于每个分块制作上传进度条
+ */
+export const uploadFile = (url, formData, onUploadProgress = () => {}) => {
+  return request.post(url,
+    { 
+      data: formData
     },
-    data
-  })
+    {
+      headers: {
+        "Content-Type": "multipart/form-data"
+      }
+    },
+    onUploadProgress
+  )
+}
+
+/**
+ * 合并请求
+ * @param {*} url 
+ * @param {*} param1 
+ */
+export const mergeChunks = (url, { fileName, fileMd5 }) => {
+  return request.get(url, {
+    params: {
+      fileName,
+      fileMd5,
+    }
+  });
 }

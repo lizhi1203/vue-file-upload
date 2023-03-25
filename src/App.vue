@@ -1,12 +1,12 @@
 <script setup>
   import { ref,computed, onMounted } from 'vue';
-  import { uploadFile, mergeChunks } from './request'
+  import { uploadFile, mergeChunks, checkFileExist } from './request'
   import SparkMD5 from 'spark-md5'
   import cloneDeep from 'lodash/cloneDeep'
 
   const currFile = ref({});
   let fileChunkList = ref([]);
-  const DefaultChunkSize = 10 * 1024 * 1024;
+  const DefaultChunkSize = 1 * 1024 * 1024;
 
   onMounted(() => {
     bindEvents();
@@ -33,29 +33,43 @@
 
   const fileChangeHandle = async(event) => {
     const [file] = event.target.files;
-    if (!file) return;
     processFile(file);
   }
 
   const processFile = async(file) => {
     if (!file) return;
 
-    if (!await isImage(file)) {
-      alert('文件格式不对，只能上传jpg, png, gif的图片格式。');
-      return;
-    }
+    // 校验图片格式，根据实际情况开放 
+    // if (!await isImage(file)) {
+    //   alert('文件格式不对，只能上传jpg, png, gif的图片格式。');
+    //   return;
+    // }
 
+    // 1.获取待上传文件
     currFile.value = file;
+
+    // 2.文件切片
     fileChunkList.value = createFileChunk(file)
-    // 方法1: 普通方式计算hash
-    // const { filehash } = await calculateHashSample();
-    // 方法2：布隆过滤器抽样hash计算md5
-    const { filehash } = await calculateHashBloomFilter();
-    // 方法3: webworker
-    // const { filehash } = await calculateHashWorker();
-    // 方法4: requestIdleCallback
-    // const { filehash } = await calculateHashIdle();
-    uploadChunk(filehash)
+
+    // 3.计算文件的MD5值
+    // 方法1: 普通方式计算MD5
+    // const { fileMd5 } = await calculateHashSample();
+    // 方法2：布隆过滤器抽样hash计算MD5
+    // const { fileMd5 } = await calculateHashBloomFilter();
+    // 方法3: 多线程(webworker)计算MD5
+    const { fileMd5 } = await calculateHashWorker();
+    // 方法4: 时间碎片(requestIdleCallback)计算MD5
+    // const { fileMd5 } = await calculateHashIdle();
+
+    // 4.检查文件是否已存在
+    const fileStatus = await checkFileExist("/exists", currFile.value.name, fileMd5);
+    // 4.1.是，文件秒传，获取已上传文件的地址
+    if (fileStatus.data && fileStatus.data.isExists) {
+      alert("文件已上传[秒传]");
+    // 4.2.否则返回已上传的分块ID列表，异步并发数量控制地进行上传或者续传，上传完成后发送合并请求
+    } else {
+      await uploadChunk({ fileMd5, chunkIds: fileStatus.data.chunkIds, poolLimit: 3 });
+    }
   }
 
   // 获取资源分块
@@ -130,7 +144,7 @@
         if (currChunk < chunkCount) {
           loadNext(currChunk)
         } else {
-          resolve({ filehash: spark.end() })
+          resolve({ fileMd5: spark.end() })
         }
       }
 
@@ -146,7 +160,7 @@
     })
   }
 
-  // 抽样hash计算md5,不算全量.
+  // 抽样hash计算fileMd5,不算全量.
   // 布隆过滤器:损失一部分的精度,换取效率.
   const calculateHashBloomFilter = () => {
     return new Promise((resolve) => {
@@ -177,7 +191,7 @@
       fileReader.readAsArrayBuffer(new Blob(chunks));
       fileReader.onload = e => {
         spark.append(e.target.result);
-        resolve({ filehash: spark.end() });
+        resolve({ fileMd5: spark.end() });
       }
     })
   };
@@ -193,7 +207,7 @@
       worker.postMessage({ fileChunkList: cloneDeep(fileChunkList.value) })
       // Worker子线程返回一条消息时被调用
       worker.addEventListener('message', e => {
-        resolve({ filehash:　e.data.filehash });
+        resolve({ fileMd5:　e.data.fileMd5 });
       })
     })
   }
@@ -251,18 +265,16 @@
   }
 
   // 上传文件和发送合并请求
-  const uploadChunk = (fileHash) => {
-    const requests = fileChunkList.value.map((item, index) => {
-      const formData = new FormData()
-      formData.append(`${currFile.value.name}-${fileHash}-${index}`, item.chunk);
-      formData.append('filename', currFile.value.name);
-      formData.append('hash', `${fileHash}-${index}`);
-      formData.append('fileHash', fileHash);
-      return uploadFile('/upload', formData, onUploadProgress(item));
+  const uploadChunk = async ({fileMd5, chunkIds, poolLimit = 1}) => {
+    await asyncPool(poolLimit, [...new Array(fileChunkList.value.length).keys()], (i) => {
+      const curChunk = fileChunkList.value[i]
+      let formData = new FormData();
+      formData.set("file", curChunk.chunk, fileMd5 + "-" + i);
+      formData.set("name", currFile.value.name);
+      formData.set("timestamp", Date.now());
+      return uploadFile('/single', formData, onUploadProgress(curChunk));
     })
-    asyncPool(4, requests, () => {
-      mergeChunks('/mergeChunks', { size: DefaultChunkSize, filename: currFile.value.name });
-    })
+    await mergeChunks('/mergeChunks', { fileName: currFile.value.name, fileMd5 });
   };
 
   const totalPercentage = computed(() => {

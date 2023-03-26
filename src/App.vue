@@ -1,12 +1,12 @@
 <script setup>
   import { ref,computed, onMounted } from 'vue';
-  import { uploadFile, mergeChunks, checkFileExist } from './request'
-  import SparkMD5 from 'spark-md5'
-  import cloneDeep from 'lodash/cloneDeep'
+  import { uploadFile, mergeChunks, checkFileExist } from './request';
+  import SparkMD5 from 'spark-md5';
+  import cloneDeep from 'lodash/cloneDeep';
 
   const currFile = ref({});
   let fileChunkList = ref([]);
-  const DefaultChunkSize = 1 * 1024 * 1024;
+  const DefaultChunkSize = 3 * 1024 * 1024;
 
   onMounted(() => {
     bindEvents();
@@ -16,18 +16,18 @@
   const bindEvents = () => {
     const drag = dragRef.value;
     drag.addEventListener('dragover', (e) => {
-      drag.style.borderColor = 'red'
-      e.preventDefault()
+      drag.style.borderColor = 'red';
+      e.preventDefault();
     })
     drag.addEventListener('dragleave', (e) => {
-      drag.style.borderColor = '#eee'
-      e.preventDefault()
+      drag.style.borderColor = '#eee';
+      e.preventDefault();
     })
     drag.addEventListener('drop', (e) => {
       const [file] = e.dataTransfer.files;
       drag.style.borderColor = 'red';
       processFile(file);
-      e.preventDefault()
+      e.preventDefault();
     })
   }
 
@@ -41,7 +41,7 @@
 
     // 校验图片格式，根据实际情况开放 
     // if (!await isImage(file)) {
-    //   alert('文件格式不对，只能上传jpg, png, gif的图片格式。');
+    //   alert('文件格式不对，只能上传jpg, png, gif的图片格式!');
     //   return;
     // }
 
@@ -49,7 +49,7 @@
     currFile.value = file;
 
     // 2.文件切片
-    fileChunkList.value = createFileChunk(file)
+    fileChunkList.value = createFileChunk(file);
 
     // 3.计算文件的MD5值
     // 方法1: 普通方式计算MD5
@@ -72,41 +72,30 @@
     }
   }
 
-  // 获取资源分块
-  const createFileChunk = (file, chunkSize = DefaultChunkSize) => {
-    let chunks = [],
-        currChunk = 0,
-        chunkCount = Math.ceil(file.size / chunkSize);
-      while (currChunk < chunkCount) {
-        let start = currChunk * chunkSize,
-          end = ((start + chunkSize) >= file.size) ? file.size : start + chunkSize;
-        chunks.push({ chunk: file.slice(start, end), size: end - start, name: file.name });
-        currChunk++;
-      }
-      return chunks;
-  }
-
+  /**
+   * 二进制大对象转换成十六进制
+   */
   const blobToString = (blob) => {
     return new Promise((resolve) => {
       const fileReader = new FileReader();
       fileReader.onload = function(e) {
-                    // blob大对象数据类型
+        // blob大对象数据类型
         const ret = e.target.result.split('')
-                    // 返回指定位置的unicode编码
-                    .map(v => v.charCodeAt())
-                    // 转换为十六进制大写
-                    .map(v => v.toString(16).toUpperCase())
-                    // 不足两位补0
-                    .map(v => v.padStart(2, '0'))
-                    .join(' ')
-        resolve(ret)
+          // 返回指定位置的unicode编码
+          .map(v => v.charCodeAt())
+          // 转换为十六进制大写
+          .map(v => v.toString(16).toUpperCase())
+          // 不足两位补0
+          .map(v => v.padStart(2, '0'))
+          .join(' ');
+        resolve(ret);
       }
-      fileReader.readAsBinaryString(blob)
+      fileReader.readAsBinaryString(blob);
     })
   }
   const isGif = async(file) => {
     // GIF89a和GIF87a
-    // blob数据是存储大对象数据类型, 一般存放二进制的，所以才用字节存取。
+    // blob数据是存储二进制大对象数据, 一般存放二进制的，所以才用字节存取。
     // 前面6个16进制'47 49 46 38 39 61'和'47 49 46 38 37 61'
     const ret = await blobToString(file.slice(0, 6))
     return (ret === '47 49 46 38 39 61') || (ret === '47 49 46 38 37 61')
@@ -125,10 +114,35 @@
     return (start == "FF D8" && tail == "FF D9");
   }
 
+  /**
+   * 是否图片(支持jpg, jpng, gif格式)
+   */
   const isImage = async(file) => {
     return await isJpg(file) || await isPng(file) || await isGif(file);
   }
 
+  /**
+   * 获取资源分块
+   * file: 文件
+   * chunkSize：分块大小
+   */
+  const createFileChunk = (file, chunkSize = DefaultChunkSize) => {
+    let chunks = [],
+      currChunk = 0,
+      // 分块数(向上取整)
+      chunkCount = Math.ceil(file.size / chunkSize);
+    while (currChunk < chunkCount) {
+      let start = currChunk * chunkSize,
+        end = ((start + chunkSize) >= file.size) ? file.size : start + chunkSize;
+      chunks.push({ chunk: file.slice(start, end), size: end - start, name: file.name });
+      currChunk++;
+    }
+    return chunks;
+  }
+
+  /**
+   * fileReader与sparkMD5方法计算hash，缺点会卡主线程
+   */
   const calculateHashSample = () => {
     return new Promise((resolve) => {
       let fileReader = new FileReader(),
@@ -160,8 +174,10 @@
     })
   }
 
-  // 抽样hash计算fileMd5,不算全量.
-  // 布隆过滤器:损失一部分的精度,换取效率.
+  /**
+   * 布隆过滤器计算md5值
+   * 抽样hash、不算全量、损失一部分的精度换取效率。
+   */
   const calculateHashBloomFilter = () => {
     return new Promise((resolve) => {
       let fileReader = new FileReader(),
@@ -169,16 +185,16 @@
         file = currFile.value,
         size = currFile.value.size,
         offset = 2 * 1024 * 1024,
-        // 第1个2M，最后一个区块数据全要
+        // 1、第1个区块取2M
         chunks = [file.slice(0, offset)],
         cur = offset;
       
       while (cur < size) {
-        // 最后一个区块数据全要
+        // 3、最后一个区块数据全要
         if (cur + offset >= size) {
           chunks.push(file.slice(cur, cur + offset));
         } else {
-          // 中间区块，取前中后各2个字节
+          // 2、中间每个区块，取前中后各2个字节
           const mid = (cur + offset) / 2;
           const end = cur + offset;
           chunks.push(file.slice(cur, cur + 2));
@@ -196,7 +212,9 @@
     })
   };
 
-  // 开启web worker计算hash值, 防止卡主线程
+  /**
+   * 开启web worker计算hash值, 防止卡主线程
+   */
   const calculateHashWorker = () => {
     return new Promise((resolve) => {
       // webWorker是要另外加载一个js文件, vite只能读取public\worker下面的worker.js文件
@@ -211,8 +229,10 @@
       })
     })
   }
-
-  // 利用浏览器时间碎片(空闲时间)计算hash值，防止卡主线程
+  
+  /**
+   * 利用浏览器时间碎片(空闲时间)计算hash值，防止卡主线程
+   */
   const calculateHashIdle = () => {
     return new Promise((resolve) => {
       let currChunk = 0,
@@ -230,8 +250,10 @@
         })
       };
 
+      // deadline:最后期限
       const workLoop = async deadline => {
         // 有任务且有空闲时间(当前帧剩余的毫秒大于0)
+        // timeRemaining:剩余时间
         while (currChunk < chunkCount && deadline.timeRemaining() > 0) {
           await appendToSpark(fileChunkList.value[currChunk].chunk);
           currChunk++;
@@ -247,7 +269,12 @@
     })
   }
 
-  // 并发请求数量控制
+  /**
+   * 异步并发请求数量控制
+   * poolLimit: 限制的并发数
+   * iterate: 任务数组
+   * iteratorFn: 表示迭代函数，用于实现对每个任务项进行处理，该函数会返回一个 Promise 对象或异步函数
+   */
   const asyncPool = async(poolLimit, iterate, iteratorFn) => {
     const ret = [];
     const executing = new Set();
@@ -264,19 +291,28 @@
     return Promise.all(ret);
   }
 
-  // 上传文件和发送合并请求
+  /**
+   * 上传文件和发送合并请求
+   * fileMd5: 文件md5值
+   * chunkIds: 已上传分块ID，用于断点续传
+   * poolLimit: 异步数量控制，默认1
+   */
   const uploadChunk = async ({fileMd5, chunkIds, poolLimit = 1}) => {
     await asyncPool(poolLimit, [...new Array(fileChunkList.value.length).keys()], (i) => {
-      const curChunk = fileChunkList.value[i]
+      const curChunk = fileChunkList.value[i];
       let formData = new FormData();
-      formData.set("file", curChunk.chunk, fileMd5 + "-" + i);
-      formData.set("name", currFile.value.name);
-      formData.set("timestamp", Date.now());
+      formData.append("file", curChunk.chunk, fileMd5 + "-" + i);
+      formData.append("name", currFile.value.name);
+      formData.append("timestamp", Date.now());
+      // (() => {})(curChunk)函数自执行
       return uploadFile('/single', formData, onUploadProgress(curChunk));
     })
     await mergeChunks('/mergeChunks', { fileName: currFile.value.name, fileMd5 });
   };
 
+  /**
+   * 总进度条
+   */
   const totalPercentage = computed(() => {
     if (!fileChunkList.value.length) return 0;
     const loaded = fileChunkList.value
@@ -285,8 +321,12 @@
     return parseInt((loaded / currFile.value.size).toFixed(2));
   });
 
+  /**
+   * 每个分块的进度条
+   */
+  // (() => {})(curChunk)函数自执行，所以可以传入2个参数
   const onUploadProgress = (item) => e => {
-    item.percentage = parseInt(String((e.loaded / e.total) * 100));
+    item.percentage = parseInt((e.loaded / e.total) * 100);
   };
 
 </script>

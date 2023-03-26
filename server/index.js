@@ -30,6 +30,7 @@ const IGNORES = [".DS_Store"]; // 忽略的文件列表
 const storage = multer.diskStorage({
   // 文件存储目录
   destination: async function (req, file, cb) {
+    // file.originalname是4231f394fb29b3ce8c1ef8d55b6a2f19-8格式
     let fileMd5 = file.originalname.split("-")[0];
     const fileDir = path.join(TMP_DIR, fileMd5);
     // 如果目录结构不存在，则创建，否则不创建
